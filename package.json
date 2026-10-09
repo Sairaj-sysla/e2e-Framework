@@ -1,0 +1,23 @@
+{
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@e2e-dev/web": "^0.13.0",
+    "@openrouter/ai-sdk-provider": "^3.0.0",
+    "@types/node": "^24.19.1",
+    "ai": "^7.0.0",
+    "e2e": "^0.18.0",
+    "typescript": "^5.9.3",
+    "zod": "^4.1.8"
+  },
+  "scripts": {
+    "demo": "node demo-app/server.js",
+    "test:e2e": "e2e run",
+    "test:login": "e2e run tests/login.e2e.ts",
+    "test:e2e:headed": "e2e run --headed",
+    "test:e2e:debug": "e2e run --debug --ai-trace --reporter list,markdown",
+    "typecheck": "tsc --noEmit",
+    "check:ai": "node scripts/check-ai-config.mjs",
+    "test:hotels": "e2e run --tag hotels --headed"
+  }
+}
