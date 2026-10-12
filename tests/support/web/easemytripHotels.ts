@@ -51,6 +51,17 @@ export async function dismissPromoPopup(browser: Browser): Promise<void> {
   }
 }
 
+/**
+ * Opens the Hotels page from the home page's main navigation. The header link
+ * is the only `a[href="/hotels/"]`; the role locator also matches a footer link.
+ */
+export async function openHotels(screen: Screen, browser: Browser): Promise<void> {
+  await browser.locator('a[href="/hotels/"]').tap();
+  await expect(browser).toHaveURL(/easemytrip\.com\/hotels\/?(\?.*)?$/);
+  // The URL changes before the heavy page finishes loading; allow for the load.
+  await expect(screen.getByRole('button', { name: 'Search' })).toBeVisible({ timeout: 30_000 });
+}
+
 export async function selectDestination(screen: Screen, browser: Browser, city: City): Promise<void> {
   await dismissPromoPopup(browser);
   await browser.locator('.htl_location').tap();

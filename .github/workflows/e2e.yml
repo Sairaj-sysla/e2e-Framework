@@ -1,0 +1,232 @@
+# E2E suites by trigger:
+#   pull_request / push to main  smoke     --tag smoke              (fast PR gate)
+#   schedule 01:00 UTC daily     regression --tag regression         (web, sharded)
+#   schedule 03:00 UTC Sunday    full      all web tests + Android/iOS when enabled
+#   workflow_dispatch            pick: smoke | regression | full | release (--tag critical)
+# `live` tests (third-party sites) never run here: EaseMyTrip blocks headless
+# browsers. Without the OPENROUTER_API_KEY secret, `ai` tests are skipped with
+# a warning instead of failing on a missing key.
+#
+# Repository variables (Settings > Secrets and variables > Actions > Variables):
+#   E2E_WEB_SHARDS   CI machines for web suites (default 1; raise as the suite grows)
+#   E2E_WORKERS      parallel test files per machine (default 2; tune from measured runs)
+#   ANDROID_ENABLED  'true' to run tests/mobile on an Android emulator in the full suite
+#   ANDROID_PACKAGE  app under test (default com.android.settings)
+#   IOS_ENABLED      'true' to run tests/mobile on an iOS simulator in the full suite
+#   IOS_BUNDLE_ID    app under test (default com.apple.Preferences)
+# Secrets: OPENROUTER_API_KEY, and E2E_USER_<NAME>_USERNAME / _PASSWORD for real apps.
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 1 * * *'
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Which suite to run
+        type: choice
+        options: [smoke, regression, full, release]
+        default: smoke
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  E2E_ENV: test
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      suite: ${{ steps.plan.outputs.suite }}
+      args: ${{ steps.plan.outputs.args }}
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - id: plan
+        env:
+          INPUT_SUITE: ${{ inputs.suite }}
+          SCHEDULE: ${{ github.event.schedule }}
+          SHARDS: ${{ vars.E2E_WEB_SHARDS || '1' }}
+        run: |
+          suite="${INPUT_SUITE:-smoke}"
+          if [ "$SCHEDULE" = '0 1 * * *' ]; then suite=regression; fi
+          if [ "$SCHEDULE" = '0 3 * * 0' ]; then suite=full; fi
+          case "$suite" in
+            smoke)      args='--tag smoke'; SHARDS=1 ;;
+            regression) args='--tag regression' ;;
+            full)       args='' ;;
+            release)    args='--tag critical'; SHARDS=1 ;;
+          esac
+          echo "suite=$suite" >> "$GITHUB_OUTPUT"
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+          echo "shards=$(seq -s, 1 "$SHARDS" | sed 's/^/[/; s/$/]/')" >> "$GITHUB_OUTPUT"
+          echo "Suite: $suite ($args), web shards: $SHARDS" >> "$GITHUB_STEP_SUMMARY"
+
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint:tests
+      - name: Check the OpenRouter key, credit and model (never prints the key)
+        if: ${{ env.OPENROUTER_API_KEY != '' }}
+        run: npm run check:ai
+
+  web:
+    needs: [plan, validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx e2e-web install chromium --with-deps
+      - name: Run ${{ needs.plan.outputs.suite }} (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+        env:
+          ARGS: ${{ needs.plan.outputs.args }}
+          WORKERS: ${{ vars.E2E_WORKERS || '2' }}
+        run: |
+          exclude=live
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::warning::OPENROUTER_API_KEY secret not set: skipping tests tagged ai"
+            exclude=live,ai
+          fi
+          npx e2e run tests/web --target web $ARGS --exclude-tag "$exclude" \
+            --shard ${{ matrix.shard }}/${{ strategy.job-total }} --workers "$WORKERS"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-report-web-${{ matrix.shard }}
+          path: |
+            .e2e/report.json
+            .e2e/junit.xml
+            .e2e/summary.md
+            .e2e/failures/
+          if-no-files-found: warn
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-artifacts-web-${{ matrix.shard }}
+          path: .e2e/artifacts
+          if-no-files-found: warn
+          retention-days: 7
+
+  android:
+    needs: [plan, validate]
+    if: ${{ needs.plan.outputs.suite == 'full' && vars.ANDROID_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      ANDROID_PACKAGE: ${{ vars.ANDROID_PACKAGE || 'com.android.settings' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          script: npx e2e run tests/mobile --target android
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-report-android
+          path: |
+            .e2e/report.json
+            .e2e/junit.xml
+            .e2e/summary.md
+            .e2e/failures/
+            .e2e/artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+  ios:
+    needs: [plan, validate]
+    if: ${{ needs.plan.outputs.suite == 'full' && vars.IOS_ENABLED == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID || 'com.apple.Preferences' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx agent-device doctor
+      # With no simulator booted, agent-device boots one.
+      - run: npx e2e run tests/mobile --target ios
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-report-ios
+          path: |
+            .e2e/report.json
+            .e2e/junit.xml
+            .e2e/summary.md
+            .e2e/failures/
+            .e2e/artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+  report:
+    needs: [web, android, ios]
+    if: ${{ !cancelled() && needs.web.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: e2e-report-*
+          path: shard-reports
+      # Health history survives between runs in the Actions cache.
+      - uses: actions/cache/restore@v4
+        with:
+          path: reports/history.jsonl
+          key: e2e-history-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: e2e-history-${{ github.ref_name }}-
+      - name: Health summary (counts, slowest tests, AI usage, failure causes)
+        run: node scripts/report-summary.mjs $(find shard-reports -name report.json | sort)
+      - uses: actions/cache/save@v4
+        if: ${{ always() }}
+        with:
+          path: reports/history.jsonl
+          key: e2e-history-${{ github.ref_name }}-${{ github.run_id }}

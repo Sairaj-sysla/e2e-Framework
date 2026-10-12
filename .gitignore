@@ -1,6 +1,7 @@
 node_modules/
+# .e2e/cache/ is committed on purpose: CI replays verified agent.act steps
+# with no model calls. Entries hold action summaries and digests, never secrets.
 .e2e/artifacts/
-.e2e/cache/
 .e2e/sessions/
 .e2e/report.json
 .e2e/ai-trace.json
@@ -14,3 +15,6 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Local health history and summary (CI keeps its own as artifacts)
+reports/

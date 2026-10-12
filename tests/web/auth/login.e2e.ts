@@ -5,14 +5,17 @@
 // - OPENROUTER_API_KEY is set: the agent.* steps below call a model.
 // - The `demo` credentials are declared in e2e.config.ts.
 //
-// AI-driven steps (agent.act, agent.assert) do the interaction and a semantic
-// check; the pass/fail verdict rests on deterministic expect() checks.
+// The suite's hybrid reference test: AI-driven steps (agent.act, agent.assert)
+// do the interaction and a semantic check; the pass/fail verdict rests on
+// deterministic expect() checks, which also let the replay cache record each
+// act. The PR smoke gate uses the deterministic E2E_LOGIN_002 instead, so pull
+// requests spend no model calls on login.
 import { test } from '@e2e-dev/web';
 import { credentials, expect } from 'e2e';
 
 test(
   'E2E_LOGIN_001: user can log in successfully and view the Dashboard',
-  { tags: ['login', 'smoke'] },
+  { tags: ['web', 'feature:auth', 'regression', 'high', 'ai'], requires: ['browser'] },
   async ({ app, agent, screen }) => {
     const demo = credentials.user('demo');
 

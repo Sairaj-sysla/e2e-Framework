@@ -2,6 +2,7 @@
   "private": true,
   "type": "module",
   "devDependencies": {
+    "@e2e-dev/mobile": "^0.11.0",
     "@e2e-dev/web": "^0.13.0",
     "@openrouter/ai-sdk-provider": "^3.0.0",
     "@types/node": "^24.19.1",
@@ -12,12 +13,22 @@
   },
   "scripts": {
     "demo": "node demo-app/server.js",
-    "test:e2e": "e2e run",
-    "test:login": "e2e run tests/login.e2e.ts",
-    "test:e2e:headed": "e2e run --headed",
-    "test:e2e:debug": "e2e run --debug --ai-trace --reporter list,markdown",
-    "typecheck": "tsc --noEmit",
     "check:ai": "node scripts/check-ai-config.mjs",
-    "test:hotels": "e2e run --tag hotels --headed"
+    "typecheck": "tsc --noEmit",
+    "lint:tests": "node scripts/validate-tests.mjs",
+    "validate": "npm run typecheck && npm run lint:tests",
+    "report": "node scripts/report-summary.mjs",
+    "test:e2e": "e2e run",
+    "test:e2e:headed": "e2e run --headed",
+    "test:e2e:debug": "e2e run --debug --ai-trace",
+    "test:smoke": "e2e run --tag smoke --exclude-tag live",
+    "test:smoke:no-ai": "e2e run --tag smoke --exclude-tag live,ai",
+    "test:critical": "e2e run --tag critical --exclude-tag live",
+    "test:regression": "e2e run tests/web --target web --exclude-tag live",
+    "test:web": "e2e run tests/web --target web",
+    "test:android": "e2e run tests/mobile --target android",
+    "test:ios": "e2e run tests/mobile --target ios",
+    "test:login": "e2e run tests/web/auth --target web",
+    "test:hotels": "e2e run tests/web/hotels --target web --headed"
   }
 }

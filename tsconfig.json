@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["e2e.config.ts", "tests/**/*.ts"]
+  "include": ["e2e.config.ts", "config/**/*.ts", "tests/**/*.ts", "test-data/**/*.ts"]
 }
